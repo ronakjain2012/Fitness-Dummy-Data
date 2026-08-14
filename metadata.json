@@ -1,0 +1,6 @@
+{
+  "name": "Fitness Data Generator",
+  "description": "Generates simulated health and fitness metrics like steps, calories, active minutes, and heart rate in real-time with background execution.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
