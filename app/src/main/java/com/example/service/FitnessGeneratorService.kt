@@ -10,6 +10,8 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.data.models.ActivityPreset
@@ -32,6 +34,7 @@ class FitnessGeneratorService : Service() {
     private var generatorJob: Job? = null
     private lateinit var repository: FitnessRepository
     private lateinit var healthConnectManager: HealthConnectManager
+    private var wakeLock: PowerManager.WakeLock? = null
 
     private var fractionalStepsAcc = 0.0
     private var fractionalFloorsAcc = 0.0
@@ -90,6 +93,8 @@ class FitnessGeneratorService : Service() {
     private fun startGeneration() {
         if (generatorJob?.isActive == true) return
 
+        acquireWakeLock()
+
         repository.updateMetrics { it.copy(isRunning = true) }
 
         val notification = buildNotification("Generating fitness metrics for OS...")
@@ -105,7 +110,7 @@ class FitnessGeneratorService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
-            android.util.Log.e("FitnessGeneratorService", "Could not start as foreground notification service: ${e.message}")
+            Log.e("FitnessGeneratorService", "Could not start as foreground notification service: ${e.message}")
         }
 
         generatorJob = serviceScope.launch {
@@ -268,9 +273,43 @@ class FitnessGeneratorService : Service() {
         }
     }
 
+    private fun acquireWakeLock() {
+        try {
+            if (wakeLock == null) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "FitDataGen::FitnessGeneratorWakeLock"
+                ).apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (wakeLock?.isHeld != true) {
+                wakeLock?.acquire()
+                Log.d("FitnessGeneratorService", "Partial WakeLock acquired successfully. Service will run with screen off.")
+            }
+        } catch (e: Exception) {
+            Log.e("FitnessGeneratorService", "Failed to acquire WakeLock: ${e.message}")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d("FitnessGeneratorService", "WakeLock released.")
+            }
+        } catch (e: Exception) {
+            Log.e("FitnessGeneratorService", "Failed to release WakeLock: ${e.message}")
+        }
+        wakeLock = null
+    }
+
     private fun stopGeneration() {
         generatorJob?.cancel()
         generatorJob = null
+
+        releaseWakeLock()
 
         repository.updateMetrics { it.copy(isRunning = false, currentCadenceSpm = 0) }
 
@@ -290,6 +329,8 @@ class FitnessGeneratorService : Service() {
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Shows active background health and fitness metric generation status"
+                setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
@@ -314,13 +355,16 @@ class FitnessGeneratorService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Fit Data Generator (Generating Data)")
+            .setContentTitle("Fit Data Generator (Active in Background)")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)
             .setContentIntent(pendingOpenApp)
             .addAction(android.R.drawable.ic_media_pause, "Stop Generator", pendingStop)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_WORKOUT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
